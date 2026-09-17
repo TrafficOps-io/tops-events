@@ -1,5 +1,9 @@
 # tops-events
 
+[![CI](https://github.com/TrafficOps-io/tops-events/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TrafficOps-io/tops-events/actions/workflows/ci.yml)
+[![Release](https://github.com/TrafficOps-io/tops-events/actions/workflows/release.yml/badge.svg)](https://github.com/TrafficOps-io/tops-events/actions/workflows/release.yml)
+[![Packagist](https://img.shields.io/packagist/v/trafficops/tops-events)](https://packagist.org/packages/trafficops/tops-events)
+
 Event catalogs, outbound delivery adapters and Eloquent event journals.
 
 One Composer package, `trafficops/tops-events`, with focused modules in `packages/`.
@@ -42,12 +46,11 @@ Tests use SQLite in memory by default. Set `MODEL_EVENTS_DB=pgsql` with `MODEL_E
 The initial release line is `v0.1.0`; versions come from Git tags, not a hard-coded Composer version.
 
 1. Publish this repository at [trafficops-io/tops-events](https://github.com/trafficops-io/tops-events).
-2. A maintainer must [submit the repository to Packagist](https://packagist.org/packages/submit) once and grant the publishing account access. Registration cannot be replaced by an update request.
-3. Add GitHub Actions secrets `PACKAGIST_USERNAME` and `PACKAGIST_TOKEN`. The Packagist **safe API token** is sufficient for updates. Enable GitHub private vulnerability reporting in the repository settings.
-4. Push a semantic version tag, for example `v0.1.0`. The release workflow reruns CI on that exact tag for PHP 8.4 and 8.5, builds the archive, then requests a Packagist refresh and publishes a GitHub release with the ZIP attached.
+2. A maintainer must [submit the repository to Packagist](https://packagist.org/packages/submit) once and keep its GitHub auto-update integration enabled.
+3. Enable GitHub private vulnerability reporting in the repository settings.
+4. Push a semantic version tag, for example `v0.1.0`. The release workflow reruns CI on that exact tag for PHP 8.4 and 8.5, builds the archive, and publishes a GitHub release with the ZIP attached. Packagist indexes the tag through its GitHub integration.
 
-The release job fails if credentials are missing or Packagist rejects the request. PHP packages are indexed from this repository by Packagist; there is no archive upload to Packagist.
-See the [Packagist update API](https://packagist.org/apidoc#update-package) for the supported authentication and endpoint.
+PHP packages are indexed from this repository by Packagist; there is no archive upload to Packagist.
 
 ## Contributing and security
 

@@ -25,22 +25,6 @@ jobs:
         with:
           name: composer-php-8.4
           path: dist
-      - name: Update Packagist
-        env:
-          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
-          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
-          REPOSITORY_URL: https://github.com/${{ github.repository }}
-        run: |
-          test -n "$PACKAGIST_USERNAME" || { echo 'Missing PACKAGIST_USERNAME secret'; exit 1; }
-          test -n "$PACKAGIST_TOKEN" || { echo 'Missing PACKAGIST_TOKEN secret'; exit 1; }
-          jq -n --arg repository "$REPOSITORY_URL" '{repository: $repository}' > /tmp/packagist-request.json
-          curl --fail-with-body --silent --show-error \
-            --header 'Content-Type: application/json' \
-            --header "Authorization: Bearer $PACKAGIST_USERNAME:$PACKAGIST_TOKEN" \
-            --user-agent "TrafficOps-release ($REPOSITORY_URL)" \
-            --data-binary @/tmp/packagist-request.json \
-            https://packagist.org/api/update-package > /tmp/packagist-response.json
-          jq -e '.status == "success"' /tmp/packagist-response.json
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
