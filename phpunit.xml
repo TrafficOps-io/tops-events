@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php" colors="true" cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="event-catalog"><directory>packages/event-catalog/tests</directory></testsuite>
+        <testsuite name="event-delivery"><directory>packages/event-delivery/tests</directory></testsuite>
+        <testsuite name="model-events"><directory>packages/model-events/tests</directory></testsuite>
+    </testsuites>
+    <source><include>
+        <directory>packages/event-catalog/src</directory>
+        <directory>packages/event-delivery/src</directory>
+        <directory>packages/model-events/src</directory>
+    </include></source>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="CACHE_STORE" value="array"/>
+        <env name="DB_CONNECTION" value="testing"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+    </php>
+</phpunit>

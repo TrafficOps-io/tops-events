@@ -1,0 +1,8 @@
+* text=auto eol=lf
+/.github export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore
+/phpunit.xml export-ignore
+/pint.json export-ignore
+/composer.lock export-ignore
+/packages/*/tests export-ignore

@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trafficops_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: intl, mbstring, pdo_sqlite, pdo_pgsql, zip
+          tools: composer:v2
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: composer check
+      - name: PostgreSQL model-events suite
+        run: vendor/bin/phpunit --testsuite model-events
+        env:
+          MODEL_EVENTS_DB: pgsql
+          MODEL_EVENTS_PG_HOST: 127.0.0.1
+          MODEL_EVENTS_PG_PORT: 5432
+          MODEL_EVENTS_PG_DATABASE: trafficops_test
+          MODEL_EVENTS_PG_USER: postgres
+          MODEL_EVENTS_PG_PASSWORD: postgres
+      - run: composer build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: composer-php-${{ matrix.php }}
+          path: dist/*.zip
+          if-no-files-found: error
