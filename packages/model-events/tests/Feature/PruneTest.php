@@ -69,7 +69,7 @@ class PruneTest extends TestCase
         foreach ($stuck as $event) {
             $event->refresh();
             $this->assertSame(OutgoingEventStatus::Failed, $event->status);
-            $this->assertSame('expired', $event->last_error);
+            $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $event->last_error);
             $this->assertTrue($event->completed_at->equalTo(now()));
             $this->assertNull($event->active_attempt_id);
             $this->assertFalse($event->acceptsDelivery());
@@ -94,7 +94,7 @@ class PruneTest extends TestCase
         $this->prune();
         $this->assertSame(OutgoingEventStatus::Queued, $waiting->fresh()->status);
         $this->assertSame(OutgoingEventStatus::Failed, $overdue->fresh()->status);
-        $this->assertSame('expired', $overdue->fresh()->last_error);
+        $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $overdue->fresh()->last_error);
     }
 
     public function test_expiry_skips_a_delivery_held_by_an_active_worker(): void
@@ -120,7 +120,7 @@ class PruneTest extends TestCase
         config(['model-events.retention.outgoing_days' => null, 'model-events.retention.expire_days' => 2]);
         $this->prune();
         $this->assertSame(OutgoingEventStatus::Failed, $event->fresh()->status);
-        $this->assertSame('expired', $event->fresh()->last_error);
+        $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $event->fresh()->last_error);
     }
 
     public function test_active_deliveries_within_retention_and_their_sources_are_kept(): void

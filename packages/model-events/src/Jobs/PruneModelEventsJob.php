@@ -100,7 +100,7 @@ abstract class PruneModelEventsJob implements ShouldQueue
                             ]);
                             $current->forceFill([
                                 'status' => OutgoingEventStatus::Failed, 'completed_at' => now(),
-                                'active_attempt_id' => null, 'last_error' => 'expired',
+                                'active_attempt_id' => null, 'last_error' => OutgoingEvent::ERROR_EXPIRED,
                             ])->saveOrFail();
                         });
                     });

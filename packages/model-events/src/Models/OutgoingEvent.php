@@ -13,6 +13,9 @@ class OutgoingEvent extends EventModel
 {
     protected $table = 'model_outgoing_events';
 
+    /** last_error of a delivery failed because it was still unfinished at the end of its expiry window. */
+    public const ERROR_EXPIRED = 'expired';
+
     /** Recorded attempts a delivery may use when deliveryAttemptLimit() returns null. */
     public const DEFAULT_ATTEMPT_LIMIT = 3;
 

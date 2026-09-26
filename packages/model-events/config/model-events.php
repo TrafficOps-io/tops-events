@@ -30,7 +30,9 @@ return [
     // Must be shared between workers. TTL must exceed the job timeout.
     'lock' => ['store' => null, 'seconds' => 120, 'release_after' => 5],
     // expire_days: a delivery still unfinished (pending/queued/processing/retrying) this many days
-    // after it was created, or after its scheduled_at if that is later, is failed as 'expired' so an
-    // incoming event never outlives its deliveries. null = same as outgoing_days.
+    // after it was created, or after its scheduled_at if that is later, is failed with
+    // last_error = OutgoingEvent::ERROR_EXPIRED so an incoming event never outlives its deliveries.
+    // The expired row is a finished delivery and stays visible for one more outgoing_days window.
+    // null = same as outgoing_days.
     'retention' => ['incoming_days' => 30, 'outgoing_days' => 30, 'expire_days' => null, 'batch_size' => 1000],
 ];
