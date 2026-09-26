@@ -24,6 +24,8 @@ class DeliverEvent extends SendOutgoingEventJob
     protected function prepare(OutgoingEvent $event): PreparedDelivery
     {
         if (app()->bound(DeliveryGuard::class) && $reason = app(DeliveryGuard::class)->rejectionReason($event)) {
+            // The delivery finishes as Skipped with last_error = reason. The metadata mirror is
+            // deprecated and kept for one release; read status and last_error instead.
             $event->forceFill(['metadata' => [...$event->metadata, 'disposition' => 'skipped', 'skip_reason' => $reason]])->saveOrFail();
             throw new SkippedDelivery($reason);
         }

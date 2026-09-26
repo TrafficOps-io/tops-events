@@ -42,6 +42,17 @@ class PruneTest extends TestCase
         $this->assertSame(0, OutgoingEvent::query()->count());
     }
 
+    public function test_skipped_deliveries_are_finished_and_pruned_with_their_source(): void
+    {
+        $owner = $this->owner();
+        $source = $owner->logIncomingEvent(new IncomingEventData('in', Payload::text('raw'), IncomingEventStatus::Ok, receivedAt: now()->subDays(40)));
+        $skipped = $owner->logOutgoingEvent(new OutgoingEventData('out', Payload::text('x'), 'y', $source));
+        $skipped->update(['status' => OutgoingEventStatus::Skipped, 'completed_at' => now()->subDays(31)]);
+        $this->prune();
+        $this->assertNull($skipped->fresh());
+        $this->assertNull($source->fresh());
+    }
+
     public function test_active_events_and_their_sources_never_expire(): void
     {
         $owner = $this->owner();

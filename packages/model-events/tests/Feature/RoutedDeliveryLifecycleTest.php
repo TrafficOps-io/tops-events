@@ -115,11 +115,16 @@ class RoutedDeliveryLifecycleTest extends TestCase
 
         $event->metadata = ['trigger_kind' => 'system', 'trigger_name' => 'delivery_failed'];
         $this->assertFalse($lifecycle->shouldRouteFailure($event));
-        $event->metadata = ['disposition' => 'skipped'];
-        $this->assertFalse($lifecycle->shouldRouteFailure($event));
-        $this->assertTrue($lifecycle->shouldRouteFailure($event, ignoreSkipped: false));
         $event->save();
         $this->assertFalse($lifecycle->shouldRouteFailure($event));
+    }
+
+    public function test_skipped_delivery_never_routes_as_a_failure(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Skipped, 'completed_at' => now(), 'last_error' => 'Owner is paused.']);
+        $this->assertTrue($event->wasChanged('status'));
+        $this->assertFalse(app(RoutedDeliveryLifecycle::class)->shouldRouteFailure($event));
     }
 
     private function attempt(RoutedOutgoingEvent $event, int $number, int $retryAfter = 0, array $response = []): OutgoingEventAttempt

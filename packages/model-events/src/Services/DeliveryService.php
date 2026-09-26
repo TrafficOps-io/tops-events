@@ -12,6 +12,7 @@ use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Exceptions\EventBusy;
 use TrafficOps\ModelEvents\Exceptions\PermanentDeliveryFailure;
 use TrafficOps\ModelEvents\Exceptions\RetryableDelivery;
+use TrafficOps\ModelEvents\Exceptions\SkippedDelivery;
 use TrafficOps\ModelEvents\Models\OutgoingEvent;
 use TrafficOps\ModelEvents\Models\OutgoingEventAttempt;
 use TrafficOps\ModelEvents\Support\EventLock;
@@ -91,7 +92,7 @@ final class DeliveryService
                 }
                 $this->finish($event, $attempt, $result);
             } catch (PermanentDeliveryFailure $error) {
-                $this->finish($event, $attempt, new DeliveryResult(false, error: $error->getMessage()), $error::class);
+                $this->finish($event, $attempt, new DeliveryResult(false, error: $error->getMessage()), $error::class, skipped: $error instanceof SkippedDelivery);
 
                 return $event->refresh();
             } catch (Throwable $error) {
@@ -116,7 +117,7 @@ final class DeliveryService
                 $model = ModelResolver::make('outgoing');
                 $model->getConnection()->transaction(function () use ($model, $eventId, $error) {
                     $event = $model->newQuery()->lockForUpdate()->find($eventId);
-                    if ($event === null || in_array($event->status, [OutgoingEventStatus::Succeeded, OutgoingEventStatus::Failed], true)) {
+                    if ($event === null || ! $event->acceptsDelivery()) {
                         return;
                     }
                     $this->interruptAttempts($event);
@@ -131,10 +132,10 @@ final class DeliveryService
         }
     }
 
-    private function finish(OutgoingEvent $event, OutgoingEventAttempt $attempt, DeliveryResult $result, ?string $exceptionClass = null): void
+    private function finish(OutgoingEvent $event, OutgoingEventAttempt $attempt, DeliveryResult $result, ?string $exceptionClass = null, bool $skipped = false): void
     {
         $attributes = $this->payloads->attributes('response', $result->response);
-        $event->getConnection()->transaction(function () use ($event, $attempt, $result, $exceptionClass, $attributes) {
+        $event->getConnection()->transaction(function () use ($event, $attempt, $result, $exceptionClass, $attributes, $skipped) {
             $current = $event->newQuery()->lockForUpdate()->findOrFail($event->getKey());
             if ($current->active_attempt_id !== $attempt->getKey()) {
                 throw new EventBusy('This attempt no longer owns the outgoing event.');
@@ -147,7 +148,12 @@ final class DeliveryService
                 'completed_at' => now(),
             ])->saveOrFail();
             $current->forceFill([
-                'status' => $result->successful ? OutgoingEventStatus::Succeeded : ($retry ? OutgoingEventStatus::Retrying : OutgoingEventStatus::Failed),
+                'status' => match (true) {
+                    $result->successful => OutgoingEventStatus::Succeeded,
+                    $retry => OutgoingEventStatus::Retrying,
+                    $skipped => OutgoingEventStatus::Skipped,
+                    default => OutgoingEventStatus::Failed,
+                },
                 'completed_at' => $retry ? null : now(), 'active_attempt_id' => null,
                 'last_error' => $result->error,
             ])->saveOrFail();

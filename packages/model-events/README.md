@@ -173,7 +173,7 @@ $project->scheduleOutgoingEvent($outgoing, SendProjectMessage::class);
 
 `prepare()` не должен выполнять внешнюю отправку. Подготовленный payload, destination и metadata фиксируются **до** `send()`. Ответ, response_metadata и ошибка дописываются в ту же попытку. Исходный payload outgoing не меняется. Приложение само определяет успешность ответа, например HTTP 200 с `ok: false` может быть ошибкой.
 
-Состояния outgoing: `pending → queued → processing → succeeded / retrying / failed`. Каждая попытка имеет номер, состояние (`preparing`, `sending`, `succeeded`, `failed`, `interrupted`) и временные отметки. При ошибке подготовки `prepared_at` и данные отправки отсутствуют.
+Состояния outgoing: `pending → queued → processing → succeeded / retrying / failed / skipped`. `skipped` — отправка отклонена guard'ом приложения до `send()`: терминальное состояние, но **не ошибка** — оно не считается failed и не вызывает маршрутизацию ошибок доставки. Каждая попытка имеет номер, состояние (`preparing`, `sending`, `succeeded`, `failed`, `interrupted`) и временные отметки. При ошибке подготовки `prepared_at` и данные отправки отсутствуют.
 
 Повторяемый `DeliveryResult` сохраняется и вызывает `RetryableDelivery`; исключения обработчика записываются и пробрасываются. Laravel повторяет job согласно tries/backoff. Неисправимая ошибка результата завершает outgoing без повтора. `failed()` фиксирует исчерпание попыток, не заменяя ответы предыдущих попыток.
 
@@ -181,9 +181,9 @@ $project->scheduleOutgoingEvent($outgoing, SendProjectMessage::class);
 
 ### Настройки и ограничения очереди
 
-Для постоянной ошибки подготовки выбрасывайте `Exceptions\PermanentDeliveryFailure` или его наследника: попытка завершится без повторной отправки и без проброса исключения. Прочие исключения сохраняются и пробрасываются.
+Для постоянной ошибки подготовки выбрасывайте `Exceptions\PermanentDeliveryFailure` или его наследника: попытка завершится без повторной отправки и без проброса исключения. Его наследник `Exceptions\SkippedDelivery` завершает outgoing как `skipped` (`last_error` = причина), а не `failed`. Прочие исключения сохраняются и пробрасываются.
 
-Настроенная модель OutgoingEvent может переопределить `acceptsDelivery(): bool` (по умолчанию отклоняет только succeeded) и `deliveryAttemptLimit(): ?int` (по умолчанию null). Абсолютный лимит учитывает все прежние попытки, включая interrupted, и проверяется под блокировкой до создания следующей попытки. Приложение само определяет изменение лимита при ручном повторе. Для автоматического восстановления вызовите `OutgoingScheduler::schedule(..., retryFailed: false)`, чтобы разрешить только pending и не возобновить terminal failed из-за гонки. По умолчанию scheduler сохраняет возможность явного повторного планирования failed.
+Настроенная модель OutgoingEvent может переопределить `acceptsDelivery(): bool` (по умолчанию отклоняет succeeded и skipped) и `deliveryAttemptLimit(): ?int` (по умолчанию null). Абсолютный лимит учитывает все прежние попытки, включая interrupted, и проверяется под блокировкой до создания следующей попытки. Приложение само определяет изменение лимита при ручном повторе. Для автоматического восстановления вызовите `OutgoingScheduler::schedule(..., retryFailed: false)`, чтобы разрешить только pending и не возобновить terminal failed из-за гонки. По умолчанию scheduler сохраняет возможность явного повторного планирования failed.
 
 Config `queue`: `connection = null`, `queue = null` (наследовать очередь приложения), `tries = 3`, `backoff = 60`, `timeout = 60`. В наследнике можно задать свои свойства `public int $tries`, `$backoff`, `$timeout`, а также `$connection` и `$queue`, либо использовать методы `Queueable` при самостоятельном dispatch. Если переопределяете конструктор, вызовите родительский с ID события.
 
@@ -216,7 +216,7 @@ app(\TrafficOps\ModelEvents\Services\DeliveryService::class)->deliver(
 `Services\RoutedDeliveryLifecycle` используется из наблюдателей и редакторов журналов:
 
 - `updating($event)` назначает повтор с учётом `retry_after` **последней** попытки и минимальной задержки 60 секунд.
-- `shouldRouteFailure($event)` проверяет переход в failed и предотвращает цикл ошибок доставки; `ignoreSkipped: false` сохраняет политику Gateway.
+- `shouldRouteFailure($event)` проверяет переход в failed и предотвращает цикл ошибок доставки. `skipped` не является failed и никогда не маршрутизируется; параметр `ignoreSkipped` и проверка `metadata.disposition` удалены.
 - `failureContext($event)` возвращает контекст `error`/`outgoing` с ID исходящей отправки и последним ответом.
 - `retry($event, guard: ..., metadata: ...)` захватывает блокировку отправки и строку внутри транзакции, проверяет актуальную запись через guard и сбрасывает состояние для нового бюджета попыток. Исходный target, incoming ID и история попыток сохраняются. Авторизацию и допустимые состояния задаёт приложение; после возврата оно запускает свой dispatcher/scheduler.
 
@@ -247,7 +247,7 @@ class PruneProjectEvents extends \TrafficOps\ModelEvents\Jobs\PruneModelEventsJo
 
 Defaults `retention`: `incoming_days = 30`, `outgoing_days = 30`, `batch_size = 1000`. `null` отключает соответствующую очистку; `0` делает записи допустимыми к удалению сразу после соответствующего времени. Граница срока включительна.
 
-Срок incoming любого статуса считается от `received_at`, outgoing — от `completed_at`. Удаляются только окончательно завершённые outgoing вместе с попытками. Incoming удаляется только при отсутствии связанных outgoing; активные отправки сохраняются. Срок действия связи может продлить жизнь incoming. Выборка проверяется заново под блокировкой перед удалением. Провайдер не запускает расписания автоматически.
+Срок incoming любого статуса считается от `received_at`, outgoing — от `completed_at`. Удаляются только окончательно завершённые outgoing (`succeeded`, `failed`, `skipped`) вместе с попытками. Incoming удаляется только при отсутствии связанных outgoing; активные отправки сохраняются. Срок действия связи может продлить жизнь incoming. Выборка проверяется заново под блокировкой перед удалением. Провайдер не запускает расписания автоматически.
 
 ## Проверки пакета
 

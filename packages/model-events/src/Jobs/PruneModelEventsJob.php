@@ -15,6 +15,9 @@ abstract class PruneModelEventsJob implements ShouldQueue
 {
     use Queueable;
 
+    /** Terminal delivery statuses; only these are ever deleted. */
+    private const FINISHED = [OutgoingEventStatus::Succeeded, OutgoingEventStatus::Failed, OutgoingEventStatus::Skipped];
+
     final public function handle(EventLock $lock): void
     {
         $size = config('model-events.retention.batch_size');
@@ -25,14 +28,14 @@ abstract class PruneModelEventsJob implements ShouldQueue
         $outgoingDays = $this->days('outgoing_days');
         if ($outgoingDays !== null) {
             $cutoff = $now->subDays($outgoingDays);
-            $this->outgoingQuery()->whereIn('status', ['succeeded', 'failed'])->where('completed_at', '<=', $cutoff)
+            $this->outgoingQuery()->whereIn('status', array_map(fn ($status) => $status->value, self::FINISHED))->where('completed_at', '<=', $cutoff)
                 ->chunkById($size, function ($events) use ($lock, $cutoff) {
                     foreach ($events as $event) {
                         try {
                             $lock->run($event->getKey(), function () use ($event, $cutoff) {
                                 $event->getConnection()->transaction(function () use ($event, $cutoff) {
                                     $current = $this->outgoingQuery()->whereKey($event->getKey())->lockForUpdate()->first();
-                                    if ($current !== null && in_array($current->status, [OutgoingEventStatus::Succeeded, OutgoingEventStatus::Failed], true)
+                                    if ($current !== null && in_array($current->status, self::FINISHED, true)
                                         && $current->completed_at !== null && $current->completed_at->lte($cutoff)) {
                                         $current->delete(); // Attempts cascade; the incoming source is preserved.
                                     }

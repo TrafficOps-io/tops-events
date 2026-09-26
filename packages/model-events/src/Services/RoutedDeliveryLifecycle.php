@@ -21,10 +21,10 @@ final class RoutedDeliveryLifecycle
         }
     }
 
-    public function shouldRouteFailure(RoutedOutgoingEvent $event, bool $ignoreSkipped = true): bool
+    /** Only a transition into Failed routes; Skipped is not a failure and never routes. */
+    public function shouldRouteFailure(RoutedOutgoingEvent $event): bool
     {
         return $event->wasChanged('status') && $event->status === OutgoingEventStatus::Failed
-            && (! $ignoreSkipped || ($event->metadata['disposition'] ?? null) !== 'skipped')
             && ! (($event->metadata['trigger_kind'] ?? '') === 'system' && ($event->metadata['trigger_name'] ?? '') === 'delivery_failed');
     }
 

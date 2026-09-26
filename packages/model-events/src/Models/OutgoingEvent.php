@@ -13,10 +13,10 @@ class OutgoingEvent extends EventModel
 {
     protected $table = 'model_outgoing_events';
 
-    /** Applications may prevent stale jobs from restarting terminal deliveries. */
+    /** Succeeded and Skipped are terminal; applications may add owner restrictions. */
     public function acceptsDelivery(): bool
     {
-        return $this->status !== OutgoingEventStatus::Succeeded;
+        return ! in_array($this->status, [OutgoingEventStatus::Succeeded, OutgoingEventStatus::Skipped], true);
     }
 
     /** Absolute attempt number limit; null preserves Laravel-managed retries. */
