@@ -4,8 +4,12 @@ namespace TrafficOps\EventDelivery\Tests;
 
 use TrafficOps\EventDelivery\Contracts\DeliveryGuard;
 use TrafficOps\EventDelivery\EventDeliveryServiceProvider;
+use TrafficOps\EventDelivery\Exceptions\PreparationFailed;
+use TrafficOps\EventDelivery\Exceptions\SkippedDelivery as DeprecatedSkippedDelivery;
 use TrafficOps\EventDelivery\Jobs\DeliverEvent;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
+use TrafficOps\ModelEvents\Exceptions\PermanentDeliveryFailure;
+use TrafficOps\ModelEvents\Exceptions\SkippedDelivery;
 use TrafficOps\ModelEvents\Models\OutgoingEvent;
 use TrafficOps\ModelEvents\Services\DeliveryService;
 use TrafficOps\ModelEvents\Tests\TestCase;
@@ -37,6 +41,17 @@ class DeliverEventTest extends TestCase
         // Deprecated mirror kept for one release; read status and last_error instead.
         $this->assertSame(['disposition' => 'skipped', 'skip_reason' => 'Owner is paused.'], $event->metadata);
         $this->assertSame(1, $event->attempts()->count());
+    }
+
+    public function test_deprecated_skipped_delivery_name_is_an_alias_of_the_model_events_exception(): void
+    {
+        $this->assertSame(SkippedDelivery::class, (new \ReflectionClass(DeprecatedSkippedDelivery::class))->getName());
+        try {
+            throw new SkippedDelivery('Owner is paused.');
+        } catch (DeprecatedSkippedDelivery $skip) {
+            $this->assertInstanceOf(PermanentDeliveryFailure::class, $skip);
+            $this->assertNotInstanceOf(PreparationFailed::class, $skip);
+        }
     }
 
     public function test_guard_acceptance_continues_to_preparation(): void
