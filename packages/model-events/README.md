@@ -245,9 +245,9 @@ class PruneProjectEvents extends \TrafficOps\ModelEvents\Jobs\PruneModelEventsJo
 \Illuminate\Support\Facades\Schedule::job(new PruneProjectEvents)->daily();
 ```
 
-Defaults `retention`: `incoming_days = 30`, `outgoing_days = 30`, `batch_size = 1000`. `null` отключает соответствующую очистку; `0` делает записи допустимыми к удалению сразу после соответствующего времени. Граница срока включительна.
+Defaults `retention`: `incoming_days = 30`, `outgoing_days = 30`, `expire_days = null`, `batch_size = 1000`. `null` отключает соответствующую очистку (`expire_days = null` означает «как `outgoing_days`»); `0` делает записи допустимыми к удалению сразу после соответствующего времени. Граница срока включительна.
 
-Срок incoming любого статуса считается от `received_at`, outgoing — от `completed_at`. Удаляются только окончательно завершённые outgoing (`succeeded`, `failed`, `skipped`) вместе с попытками. Incoming удаляется только при отсутствии связанных outgoing; активные отправки сохраняются. Срок действия связи может продлить жизнь incoming. Выборка проверяется заново под блокировкой перед удалением. Провайдер не запускает расписания автоматически.
+Срок incoming любого статуса считается от `received_at`, outgoing — от `completed_at`. Удаляются только окончательно завершённые outgoing (`succeeded`, `failed`, `skipped`) вместе с попытками. Incoming удаляется только при отсутствии связанных outgoing. Перед удалением job истекает зависшие отправки: outgoing, всё ещё в `pending`/`queued`/`processing`/`retrying` спустя `expire_days` после `created_at` (или после `scheduled_at`, если он позже), переводится в `failed` с `last_error = expired`, `completed_at = now()`, снятым `active_attempt_id` и незавершёнными попытками в `interrupted`; отправки под активной блокировкой worker'а пропускаются до следующего запуска. Так incoming никогда не переживает свои outgoing: истёкшая отправка удаляется по обычному сроку `outgoing_days`, после чего удаляется и источник. Выборка проверяется заново под блокировкой перед изменением и удалением. Провайдер не запускает расписания автоматически.
 
 ## Проверки пакета
 
