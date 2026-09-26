@@ -37,7 +37,7 @@ class ApplicationDeliveryTest extends TestCase
     public function test_a_delivery_without_an_explicit_limit_uses_the_default_attempt_limit(): void
     {
         $event = $this->outgoing();
-        $this->assertNull($event->deliveryAttemptLimit());
+        $this->assertSame(OutgoingEvent::DEFAULT_ATTEMPT_LIMIT, $event->deliveryAttemptLimit());
         foreach (range(1, OutgoingEvent::DEFAULT_ATTEMPT_LIMIT) as $number) {
             $event->attempts()->create(['number' => $number, 'status' => AttemptStatus::Failed, 'started_at' => now(), 'completed_at' => now()]);
         }
@@ -74,7 +74,7 @@ class ApplicationDeliveryTest extends TestCase
 
 class LimitedOutgoing extends OutgoingEvent
 {
-    public function deliveryAttemptLimit(): ?int
+    public function deliveryAttemptLimit(): int
     {
         return 1;
     }

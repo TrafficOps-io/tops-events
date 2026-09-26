@@ -20,8 +20,8 @@ return [
         'queue' => null,
         // 0 = unlimited queue attempts. A job released because the event lock is busy or the
         // delivery is not due yet is a wait, not an attempt, and must never fail the delivery.
-        // The only business limit is the recorded-attempt budget: OutgoingEvent::deliveryAttemptLimit(),
-        // which falls back to OutgoingEvent::DEFAULT_ATTEMPT_LIMIT (3). Setting tries > 0 makes
+        // The only business limit is the recorded-attempt budget: OutgoingEvent::deliveryAttemptLimit()
+        // (OutgoingEvent::DEFAULT_ATTEMPT_LIMIT = 3 unless overridden). Setting tries > 0 makes
         // waits count again and is discouraged.
         'tries' => 0,
         'backoff' => 60,

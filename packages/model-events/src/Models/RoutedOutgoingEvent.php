@@ -10,7 +10,7 @@ class RoutedOutgoingEvent extends OutgoingEvent
         return static::DEFAULT_ATTEMPT_LIMIT;
     }
 
-    public function deliveryAttemptLimit(): ?int
+    public function deliveryAttemptLimit(): int
     {
         return (int) $this->attempts_offset + $this->deliveryAttemptsPerRun();
     }

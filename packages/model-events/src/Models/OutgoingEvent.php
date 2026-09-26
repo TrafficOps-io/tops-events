@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use TrafficOps\ModelEvents\Enums\AttemptStatus;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Support\ModelResolver;
 
@@ -20,29 +21,43 @@ class OutgoingEvent extends EventModel
     /** Expiry window in days when neither retention.expire_days nor retention.outgoing_days is set. */
     public const DEFAULT_EXPIRY_DAYS = 30;
 
-    /** Recorded attempts a delivery may use when deliveryAttemptLimit() returns null. */
+    /** Recorded attempts a delivery may use unless deliveryAttemptLimit() says otherwise. */
     public const DEFAULT_ATTEMPT_LIMIT = 3;
 
-    /** Statuses a delivery may still be sent from; Succeeded, Failed and Skipped are terminal. */
-    public const ACCEPTING_STATUSES = [OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying];
-
     /**
-     * Only an unfinished delivery accepts delivery. Failed is terminal for automatic
-     * processing: a stale job or queue:retry never resumes it, only a manual retry
-     * (RoutedDeliveryLifecycle::retry) reopens it. Applications may add owner restrictions.
+     * Only an unfinished delivery accepts delivery (OutgoingEventStatus::accepting()). Failed is
+     * terminal for automatic processing: a stale job or queue:retry never resumes it, only a
+     * manual retry (RoutedDeliveryLifecycle::retry) reopens it. Applications may add owner restrictions.
      */
     public function acceptsDelivery(): bool
     {
-        return in_array($this->status, self::ACCEPTING_STATUSES, true);
+        return $this->status instanceof OutgoingEventStatus && ! $this->status->isTerminal();
     }
 
     /**
-     * Absolute recorded-attempt limit, the only business limit on a delivery; null applies
-     * DEFAULT_ATTEMPT_LIMIT. Queue releases (busy lock, not yet due) are not attempts.
+     * Absolute recorded-attempt limit, the only business limit on a delivery.
+     * Queue releases (busy lock, not yet due) are not attempts.
      */
-    public function deliveryAttemptLimit(): ?int
+    public function deliveryAttemptLimit(): int
     {
-        return null;
+        return static::DEFAULT_ATTEMPT_LIMIT;
+    }
+
+    /** Finishes the delivery as Failed with the given reason; callers hold the row lock. */
+    public function markFailed(string $error): void
+    {
+        $this->forceFill([
+            'status' => OutgoingEventStatus::Failed, 'completed_at' => now(),
+            'active_attempt_id' => null, 'last_error' => $error,
+        ])->saveOrFail();
+    }
+
+    /** Closes attempts that never recorded a result; their delivery outcome is unknown. */
+    public function interruptOpenAttempts(string $reason): void
+    {
+        $this->attempts()->whereNull('completed_at')->update([
+            'status' => AttemptStatus::Interrupted->value, 'completed_at' => now(), 'error' => $reason,
+        ]);
     }
 
     /** Days an unfinished delivery may live: retention.expire_days, else outgoing_days, else the default. */
