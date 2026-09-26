@@ -2,6 +2,8 @@
 
 namespace TrafficOps\EventCatalog;
 
+use TrafficOps\EventCatalog\Exceptions\ReservedEventName;
+
 final class EventNameResolver
 {
     public function __construct(
@@ -11,7 +13,11 @@ final class EventNameResolver
         private readonly array $reservedNames = [],
     ) {}
 
-    /** @return array{0: string, 1: array<string, list<string>>} */
+    /**
+     * @return array{0: string, 1: array<string, list<string>>}
+     *
+     * @throws ReservedEventName when the name is a reserved system event name
+     */
     public function resolve(array $payload, ?string $pathName = null): array
     {
         if ($pathName !== null) {
@@ -60,7 +66,10 @@ final class EventNameResolver
             return ['unnamed', [$field => ["Event name must be a string of at most {$this->maxLength} characters."]]];
         }
         $name = trim($value) === '' ? 'unnamed' : $value;
+        if (in_array($name, $this->reservedNames, true)) {
+            throw new ReservedEventName($name, $field);
+        }
 
-        return [$name, in_array($name, $this->reservedNames, true) ? [$field => ['System event names are reserved.']] : []];
+        return [$name, []];
     }
 }
