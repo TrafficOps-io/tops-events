@@ -7,7 +7,7 @@ class RoutedOutgoingEvent extends OutgoingEvent
 {
     public function deliveryAttemptsPerRun(): int
     {
-        return 3;
+        return static::DEFAULT_ATTEMPT_LIMIT;
     }
 
     public function deliveryAttemptLimit(): ?int

@@ -13,6 +13,9 @@ class OutgoingEvent extends EventModel
 {
     protected $table = 'model_outgoing_events';
 
+    /** Recorded attempts a delivery may use when deliveryAttemptLimit() returns null. */
+    public const DEFAULT_ATTEMPT_LIMIT = 3;
+
     /** Statuses a delivery may still be sent from; Succeeded, Failed and Skipped are terminal. */
     public const ACCEPTING_STATUSES = [OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying];
 
@@ -26,7 +29,10 @@ class OutgoingEvent extends EventModel
         return in_array($this->status, self::ACCEPTING_STATUSES, true);
     }
 
-    /** Absolute attempt number limit; null preserves Laravel-managed retries. */
+    /**
+     * Absolute recorded-attempt limit, the only business limit on a delivery; null applies
+     * DEFAULT_ATTEMPT_LIMIT. Queue releases (busy lock, not yet due) are not attempts.
+     */
     public function deliveryAttemptLimit(): ?int
     {
         return null;

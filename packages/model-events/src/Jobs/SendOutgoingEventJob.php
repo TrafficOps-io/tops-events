@@ -19,7 +19,9 @@ abstract class SendOutgoingEventJob implements ShouldQueue
 {
     use InteractsWithQueue, Queueable;
 
-    // Declare these in a subclass to override config defaults.
+    // Declare these in a subclass to override config defaults. tries stays 0 (unlimited):
+    // releases for a busy lock or a not-yet-due delivery are waits, not attempts, and the
+    // recorded-attempt budget (OutgoingEvent::deliveryAttemptLimit()) is the only limit.
     public int $tries;
 
     public int $backoff;

@@ -45,7 +45,7 @@ final class DeliveryService
                 }
                 $this->interruptAttempts($event);
                 $number = ((int) $event->attempts()->max('number')) + 1;
-                if ($event->deliveryAttemptLimit() !== null && $number > $event->deliveryAttemptLimit()) {
+                if ($number > $this->attemptLimit($event)) {
                     $event->forceFill(['status' => OutgoingEventStatus::Failed, 'completed_at' => now(),
                         'active_attempt_id' => null, 'last_error' => 'Delivery retry budget exhausted.'])->saveOrFail();
 
@@ -90,7 +90,7 @@ final class DeliveryService
                 if (! $result instanceof DeliveryResult) {
                     throw new LogicException('send() must return DeliveryResult.');
                 }
-                $this->finish($event, $attempt, $result);
+                $retry = $this->finish($event, $attempt, $result);
             } catch (PermanentDeliveryFailure $error) {
                 $this->finish($event, $attempt, new DeliveryResult(false, error: $error->getMessage()), $error::class, skipped: $error instanceof SkippedDelivery);
 
@@ -101,7 +101,7 @@ final class DeliveryService
                 throw $error;
             }
 
-            if (! $result->successful && $result->retryable) {
+            if ($retry) {
                 throw new RetryableDelivery($result->error ?? 'Delivery requested a retry.');
             }
 
@@ -132,19 +132,25 @@ final class DeliveryService
         }
     }
 
-    private function finish(OutgoingEvent $event, OutgoingEventAttempt $attempt, DeliveryResult $result, ?string $exceptionClass = null, bool $skipped = false): void
+    /**
+     * Records the attempt outcome and the delivery status. Returns whether another attempt
+     * follows: a retryable failure on the last permitted attempt fails the delivery instead,
+     * so the job is not released only to discover an exhausted budget.
+     */
+    private function finish(OutgoingEvent $event, OutgoingEventAttempt $attempt, DeliveryResult $result, ?string $exceptionClass = null, bool $skipped = false): bool
     {
         $attributes = $this->payloads->attributes('response', $result->response);
-        $event->getConnection()->transaction(function () use ($event, $attempt, $result, $exceptionClass, $attributes, $skipped) {
+        $retryable = ! $result->successful && $result->retryable;
+        $retry = $retryable && $attempt->number < $this->attemptLimit($event);
+        $event->getConnection()->transaction(function () use ($event, $attempt, $result, $exceptionClass, $attributes, $skipped, $retryable, $retry) {
             $current = $event->newQuery()->lockForUpdate()->findOrFail($event->getKey());
             if ($current->active_attempt_id !== $attempt->getKey()) {
                 throw new EventBusy('This attempt no longer owns the outgoing event.');
             }
-            $retry = ! $result->successful && $result->retryable;
             $attempt->forceFill([
                 ...$attributes, 'response_metadata' => $result->metadata,
                 'status' => $result->successful ? AttemptStatus::Succeeded : AttemptStatus::Failed,
-                'retryable' => $retry, 'error' => $result->error, 'exception_class' => $exceptionClass,
+                'retryable' => $retryable, 'error' => $result->error, 'exception_class' => $exceptionClass,
                 'completed_at' => now(),
             ])->saveOrFail();
             $current->forceFill([
@@ -158,6 +164,13 @@ final class DeliveryService
                 'last_error' => $result->error,
             ])->saveOrFail();
         });
+
+        return $retry;
+    }
+
+    private function attemptLimit(OutgoingEvent $event): int
+    {
+        return $event->deliveryAttemptLimit() ?? OutgoingEvent::DEFAULT_ATTEMPT_LIMIT;
     }
 
     private function interruptAttempts(OutgoingEvent $event): void

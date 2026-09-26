@@ -16,6 +16,7 @@ use TrafficOps\ModelEvents\DTO\PreparedDelivery;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Exceptions\RetryableDelivery;
 use TrafficOps\ModelEvents\Services\OutgoingScheduler;
+use TrafficOps\ModelEvents\Support\EventLock;
 use TrafficOps\ModelEvents\Tests\Fixtures\TestSendJob;
 use TrafficOps\ModelEvents\Tests\TestCase;
 
@@ -75,7 +76,51 @@ class QueueTest extends TestCase
         $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
     }
 
-    public function test_actual_worker_retries_and_finalizes_after_max_tries(): void
+    public function test_lock_busy_releases_are_not_attempts_and_never_consume_the_budget(): void
+    {
+        config(['queue.default' => 'database']);
+        $event = $this->outgoing();
+        app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
+        app(EventLock::class)->run($event->id, function () use ($event) {
+            for ($release = 1; $release <= 5; $release++) {
+                app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+                $this->assertSame(0, $event->attempts()->count());
+                $this->assertSame(OutgoingEventStatus::Queued, $event->refresh()->status);
+                $this->assertSame($release, (int) DB::table('jobs')->sole()->attempts);
+                $this->travel(6)->seconds();
+            }
+        });
+        app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+        $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
+        $this->assertSame(1, $event->attempts()->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+    }
+
+    public function test_not_yet_due_releases_are_not_attempts_and_never_consume_the_budget(): void
+    {
+        config(['queue.default' => 'database']);
+        $event = $this->outgoing();
+        app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
+        for ($release = 1; $release <= 5; $release++) {
+            $event->update(['scheduled_at' => now()->addSeconds(10)]);
+            app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+            $this->assertSame(0, $event->attempts()->count());
+            $this->assertSame($release, (int) DB::table('jobs')->sole()->attempts);
+            $this->assertNull(Queue::connection('database')->pop());
+            $this->travel(10)->seconds();
+        }
+        app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+        $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
+        $this->assertSame(1, $event->attempts()->count());
+    }
+
+    public function test_queue_tries_are_unlimited_by_default_so_only_recorded_attempts_limit_a_delivery(): void
+    {
+        $this->assertSame(0, config('model-events.queue.tries'));
+        $this->assertSame(0, (new TestSendJob('id'))->tries);
+    }
+
+    public function test_a_retryable_failure_on_the_last_permitted_attempt_fails_the_delivery(): void
     {
         config(['queue.default' => 'database']);
         $event = $this->outgoing();
@@ -92,8 +137,10 @@ class QueueTest extends TestCase
             $this->assertSame($number === 3 ? OutgoingEventStatus::Failed : OutgoingEventStatus::Retrying, $event->refresh()->status);
             $this->travel(61)->seconds();
         }
+        // The third attempt is the last one the default budget permits: the delivery fails there, without a fourth job run.
         $this->assertSame(0, DB::table('jobs')->count());
         $this->assertNotNull($event->completed_at);
+        $this->assertSame('Retry', $event->last_error);
         $this->assertSame(['response-1', 'response-2', 'response-3'], $event->attempts()->get()->map(fn ($attempt) => $attempt->decodedPayload('response'))->all());
     }
 
