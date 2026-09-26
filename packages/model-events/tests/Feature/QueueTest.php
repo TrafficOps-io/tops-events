@@ -3,6 +3,7 @@
 namespace TrafficOps\ModelEvents\Tests\Feature;
 
 use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Queue\MaxAttemptsExceededException;
 use Illuminate\Queue\Worker;
 use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,7 @@ use TrafficOps\ModelEvents\DTO\Payload;
 use TrafficOps\ModelEvents\DTO\PreparedDelivery;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Exceptions\RetryableDelivery;
+use TrafficOps\ModelEvents\Models\OutgoingEvent;
 use TrafficOps\ModelEvents\Services\OutgoingScheduler;
 use TrafficOps\ModelEvents\Support\EventLock;
 use TrafficOps\ModelEvents\Tests\Fixtures\TestSendJob;
@@ -113,6 +115,58 @@ class QueueTest extends TestCase
         app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
         $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
         $this->assertSame(1, $event->attempts()->count());
+    }
+
+    public function test_retry_until_is_the_delivery_expiry_horizon(): void
+    {
+        $this->travelTo(now()->startOfSecond());
+        $event = $this->outgoing();
+        $job = new TestSendJob($event->id);
+        $this->assertTrue($job->retryUntil()->equalTo(now()->addDays(30)), 'expire_days defaults to outgoing_days.');
+
+        $event->update(['scheduled_at' => now()->addDays(40)]);
+        $this->assertTrue($job->retryUntil()->equalTo(now()->addDays(70)), 'A later scheduled_at starts the window.');
+
+        config(['model-events.retention.outgoing_days' => null, 'model-events.retention.expire_days' => null]);
+        $this->assertTrue($job->retryUntil()->equalTo(now()->addDays(40 + OutgoingEvent::DEFAULT_EXPIRY_DAYS)), 'Without retention the hard default bounds the job.');
+
+        config(['model-events.retention.expire_days' => 2]);
+        $this->assertTrue($job->retryUntil()->equalTo(now()->addDays(42)));
+        $this->assertTrue((new TestSendJob('missing'))->retryUntil()->equalTo(now()->addDays(2)));
+    }
+
+    public function test_a_delivery_scheduled_far_in_the_future_is_delivered_when_due(): void
+    {
+        config(['queue.default' => 'database']);
+        $event = $this->outgoing();
+        app(OutgoingScheduler::class)->schedule($event, TestSendJob::class, now()->addDays(40));
+        $this->travel(40)->days();
+        $this->travel(1)->seconds();
+        app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+        $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
+    }
+
+    public function test_a_delivery_pushed_beyond_its_expiry_horizon_is_failed_as_expired_instead_of_waiting_forever(): void
+    {
+        config(['queue.default' => 'database']);
+        $event = $this->outgoing();
+        app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
+        $event->update(['scheduled_at' => now()->addDays(100)]);
+        app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+        $this->assertSame(OutgoingEventStatus::Queued, $event->refresh()->status, 'Not due yet: released, not an attempt.');
+        $this->travel(100)->days();
+        try {
+            app('queue.worker')->process('database', Queue::connection('database')->pop(), new WorkerOptions);
+            $this->fail('Laravel fails the job once retryUntil has passed.');
+        } catch (MaxAttemptsExceededException) {
+            // Worker rethrows after failing the job; failed() has finished the delivery.
+        }
+        $event->refresh();
+        $this->assertSame(OutgoingEventStatus::Failed, $event->status);
+        $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $event->last_error);
+        $this->assertNotNull($event->completed_at);
+        $this->assertSame(0, $event->attempts()->count());
+        $this->assertSame(0, DB::table('jobs')->count());
     }
 
     public function test_queue_tries_are_unlimited_by_default_so_only_recorded_attempts_limit_a_delivery(): void

@@ -2,6 +2,7 @@
 
 namespace TrafficOps\ModelEvents\Models;
 
+use DateTimeImmutable;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -15,6 +16,9 @@ class OutgoingEvent extends EventModel
 
     /** last_error of a delivery failed because it was still unfinished at the end of its expiry window. */
     public const ERROR_EXPIRED = 'expired';
+
+    /** Expiry window in days when neither retention.expire_days nor retention.outgoing_days is set. */
+    public const DEFAULT_EXPIRY_DAYS = 30;
 
     /** Recorded attempts a delivery may use when deliveryAttemptLimit() returns null. */
     public const DEFAULT_ATTEMPT_LIMIT = 3;
@@ -39,6 +43,26 @@ class OutgoingEvent extends EventModel
     public function deliveryAttemptLimit(): ?int
     {
         return null;
+    }
+
+    /** Days an unfinished delivery may live: retention.expire_days, else outgoing_days, else the default. */
+    public static function expiryDays(): int
+    {
+        return config('model-events.retention.expire_days') ?? config('model-events.retention.outgoing_days') ?? self::DEFAULT_EXPIRY_DAYS;
+    }
+
+    /**
+     * When this delivery expires if still unfinished: expiryDays() after created_at, or after
+     * scheduled_at when that is later. Bounds the queue job and drives the prune job's expiry pass.
+     */
+    public function expiresAt(): DateTimeImmutable
+    {
+        $from = ($this->created_at ?? now())->toImmutable();
+        if ($this->scheduled_at?->greaterThan($from)) {
+            $from = $this->scheduled_at;
+        }
+
+        return $from->addDays(static::expiryDays());
     }
 
     protected function casts(): array

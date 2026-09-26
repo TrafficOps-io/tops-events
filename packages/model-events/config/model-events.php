@@ -33,6 +33,7 @@ return [
     // after it was created, or after its scheduled_at if that is later, is failed with
     // last_error = OutgoingEvent::ERROR_EXPIRED so an incoming event never outlives its deliveries.
     // The expired row is a finished delivery and stays visible for one more outgoing_days window.
-    // null = same as outgoing_days.
+    // The same window bounds the queue job (retryUntil), so a never-due delivery cannot wait forever.
+    // null = same as outgoing_days; when that is null too, OutgoingEvent::DEFAULT_EXPIRY_DAYS (30) applies.
     'retention' => ['incoming_days' => 30, 'outgoing_days' => 30, 'expire_days' => null, 'batch_size' => 1000],
 ];

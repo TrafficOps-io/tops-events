@@ -31,10 +31,8 @@ abstract class PruneModelEventsJob implements ShouldQueue
         }
         $now = now()->toImmutable();
         $outgoingDays = $this->days('outgoing_days');
-        $expireDays = $this->days('expire_days') ?? $outgoingDays;
-        if ($expireDays !== null) {
-            $this->expire($lock, $now->subDays($expireDays), $size);
-        }
+        $this->days('expire_days');
+        $this->expire($lock, $now->subDays(OutgoingEvent::expiryDays()), $size);
         if ($outgoingDays !== null) {
             $cutoff = $now->subDays($outgoingDays);
             $this->outgoingQuery()->whereIn('status', array_map(fn ($status) => $status->value, self::FINISHED))->where('completed_at', '<=', $cutoff)
@@ -76,8 +74,9 @@ abstract class PruneModelEventsJob implements ShouldQueue
 
     /**
      * A delivery still unfinished at the end of its window is failed as expired so its incoming
-     * event can be pruned later. The window runs from created_at, or from scheduled_at when later.
-     * Deliveries held by an active worker are skipped until the next run.
+     * event can be pruned later. The window is OutgoingEvent::expiryDays() from created_at, or
+     * from scheduled_at when later, and always applies: a delivery must terminate even when
+     * retention is disabled. Deliveries held by an active worker are skipped until the next run.
      */
     private function expire(EventLock $lock, \DateTimeImmutable $cutoff, int $size): void
     {
