@@ -166,7 +166,9 @@ class PruneTest extends TestCase
             protected function outgoingQuery(): Builder
             {
                 if (++$this->queries === 2) {
-                    app(OutgoingScheduler::class)->schedule($this->event, TestSendJob::class, now()->addDay(), retryFailed: true);
+                    // A manual retry reopened the delivery between candidate selection and the locked re-check.
+                    $this->event->update(['status' => OutgoingEventStatus::Pending, 'completed_at' => null]);
+                    app(OutgoingScheduler::class)->schedule($this->event, TestSendJob::class, now()->addDay());
                 }
 
                 return parent::outgoingQuery();

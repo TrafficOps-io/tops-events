@@ -11,6 +11,7 @@ use InvalidArgumentException;
 use Mockery;
 use RuntimeException;
 use TrafficOps\ModelEvents\DTO\DeliveryResult;
+use TrafficOps\ModelEvents\DTO\OutgoingEventData;
 use TrafficOps\ModelEvents\DTO\Payload;
 use TrafficOps\ModelEvents\DTO\PreparedDelivery;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
@@ -162,18 +163,24 @@ class QueueTest extends TestCase
         app(OutgoingScheduler::class)->schedule($this->outgoing(), TestSendJob::class, now()->addHour());
     }
 
-    public function test_scheduler_does_not_reopen_a_failed_delivery_unless_asked(): void
+    public function test_scheduler_queues_only_a_pending_delivery(): void
     {
-        $event = $this->outgoing();
-        $event->update(['status' => OutgoingEventStatus::Failed, 'completed_at' => now(), 'last_error' => 'Unavailable']);
-        try {
-            app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
-            $this->fail('Failed is terminal for the scheduler by default.');
-        } catch (InvalidArgumentException) {
-            $this->assertSame(OutgoingEventStatus::Failed, $event->refresh()->status);
+        $owner = $this->owner();
+        foreach (OutgoingEventStatus::cases() as $status) {
+            if ($status === OutgoingEventStatus::Pending) {
+                continue;
+            }
+            $event = $owner->logOutgoingEvent(new OutgoingEventData('notify', Payload::text('x'), 'recipient'));
+            $event->update(['status' => $status]);
+            try {
+                app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
+                $this->fail("A {$status->value} delivery must not be scheduled; reopening Failed is retry()'s job.");
+            } catch (InvalidArgumentException $refusal) {
+                $this->assertSame('Only pending deliveries can be scheduled.', $refusal->getMessage());
+                $this->assertSame($status, $event->fresh()->status);
+            }
         }
-        $reopened = app(OutgoingScheduler::class)->schedule($event, TestSendJob::class, retryFailed: true);
-        $this->assertSame(OutgoingEventStatus::Succeeded, $reopened->status);
+        $this->assertFalse((new \ReflectionMethod(OutgoingScheduler::class, 'schedule'))->getParameters()[3] ?? false, 'schedule() takes no retryFailed flag.');
     }
 
     public function test_duplicate_scheduling_is_rejected(): void
