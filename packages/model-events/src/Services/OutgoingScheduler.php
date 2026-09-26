@@ -16,7 +16,12 @@ final class OutgoingScheduler
 {
     public function __construct(private Dispatcher $bus) {}
 
-    public function schedule(OutgoingEvent $event, string $jobClass, ?DateTimeInterface $at = null, bool $retryFailed = true): OutgoingEvent
+    /**
+     * Failed is terminal: by default only a Pending delivery is scheduled. retryFailed
+     * re-queues a Failed delivery without a fresh attempt budget; prefer
+     * RoutedDeliveryLifecycle::retry() followed by scheduling the Pending result.
+     */
+    public function schedule(OutgoingEvent $event, string $jobClass, ?DateTimeInterface $at = null, bool $retryFailed = false): OutgoingEvent
     {
         if (! $event->exists || ! is_subclass_of($jobClass, SendOutgoingEventJob::class) || (new ReflectionClass($jobClass))->isAbstract()) {
             throw new InvalidArgumentException('Scheduling requires a persisted outgoing event and a concrete SendOutgoingEventJob subclass.');

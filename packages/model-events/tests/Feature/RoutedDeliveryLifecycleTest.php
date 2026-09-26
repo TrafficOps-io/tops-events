@@ -11,6 +11,7 @@ use TrafficOps\ModelEvents\DTO\Payload;
 use TrafficOps\ModelEvents\Enums\AttemptStatus;
 use TrafficOps\ModelEvents\Enums\IncomingEventStatus;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
+use TrafficOps\ModelEvents\Exceptions\DeliveryNotRetryable;
 use TrafficOps\ModelEvents\Exceptions\EventBusy;
 use TrafficOps\ModelEvents\Models\OutgoingEventAttempt;
 use TrafficOps\ModelEvents\Models\RoutedOutgoingEvent;
@@ -61,18 +62,31 @@ class RoutedDeliveryLifecycleTest extends TestCase
     public function test_retry_guard_reads_current_status_and_rejects_without_modifying_history(): void
     {
         $event = $this->outgoing();
-        $event->newQuery()->whereKey($event->id)->update(['status' => OutgoingEventStatus::Succeeded]);
+        $event->newQuery()->whereKey($event->id)->update(['status' => OutgoingEventStatus::Failed]);
         try {
             app(RoutedDeliveryLifecycle::class)->retry($event, function ($current) {
-                $this->assertSame(OutgoingEventStatus::Succeeded, $current->status);
+                $this->assertSame(OutgoingEventStatus::Failed, $current->status);
                 throw new LogicException('Cannot retry this event.');
             });
             $this->fail('Expected guard rejection.');
         } catch (LogicException $exception) {
             $this->assertSame('Cannot retry this event.', $exception->getMessage());
         }
-        $this->assertSame(OutgoingEventStatus::Succeeded, $event->fresh()->status);
+        $this->assertSame(OutgoingEventStatus::Failed, $event->fresh()->status);
         $this->assertSame(0, $event->attempts()->count());
+    }
+
+    public function test_retry_refuses_a_succeeded_delivery(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Succeeded, 'completed_at' => now()]);
+        try {
+            app(RoutedDeliveryLifecycle::class)->retry($event, fn () => $this->fail('The guard must not run for a succeeded delivery.'));
+            $this->fail('A succeeded delivery cannot be retried.');
+        } catch (DeliveryNotRetryable) {
+            $this->assertSame(OutgoingEventStatus::Succeeded, $event->fresh()->status);
+            $this->assertNotNull($event->completed_at);
+        }
     }
 
     public function test_retry_cannot_overlap_an_active_delivery_lock(): void

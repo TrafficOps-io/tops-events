@@ -96,7 +96,7 @@ class PruneTest extends TestCase
             protected function outgoingQuery(): Builder
             {
                 if (++$this->queries === 2) {
-                    app(OutgoingScheduler::class)->schedule($this->event, TestSendJob::class, now()->addDay());
+                    app(OutgoingScheduler::class)->schedule($this->event, TestSendJob::class, now()->addDay(), retryFailed: true);
                 }
 
                 return parent::outgoingQuery();

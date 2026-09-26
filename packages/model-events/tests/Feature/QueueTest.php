@@ -115,6 +115,20 @@ class QueueTest extends TestCase
         app(OutgoingScheduler::class)->schedule($this->outgoing(), TestSendJob::class, now()->addHour());
     }
 
+    public function test_scheduler_does_not_reopen_a_failed_delivery_unless_asked(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Failed, 'completed_at' => now(), 'last_error' => 'Unavailable']);
+        try {
+            app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
+            $this->fail('Failed is terminal for the scheduler by default.');
+        } catch (InvalidArgumentException) {
+            $this->assertSame(OutgoingEventStatus::Failed, $event->refresh()->status);
+        }
+        $reopened = app(OutgoingScheduler::class)->schedule($event, TestSendJob::class, retryFailed: true);
+        $this->assertSame(OutgoingEventStatus::Succeeded, $reopened->status);
+    }
+
     public function test_duplicate_scheduling_is_rejected(): void
     {
         config(['queue.default' => 'database']);

@@ -31,9 +31,8 @@ class ApplicationDeliveryTest extends TestCase
         $this->assertSame(AttemptStatus::Interrupted, $event->attempts()->sole()->status);
     }
 
-    public function test_application_can_prevent_stale_jobs_from_restarting_failed_events(): void
+    public function test_failed_delivery_is_terminal_for_stale_jobs_in_the_base_model(): void
     {
-        config(['model-events.models.outgoing' => LimitedOutgoing::class]);
         $event = $this->outgoing();
         $event->update(['status' => OutgoingEventStatus::Failed]);
         $result = app(DeliveryService::class)->deliver($event->id, fn () => $this->fail('Preparation was invoked.'), fn () => $this->fail('Transport was invoked.'));
@@ -47,10 +46,5 @@ class LimitedOutgoing extends OutgoingEvent
     public function deliveryAttemptLimit(): ?int
     {
         return 1;
-    }
-
-    public function acceptsDelivery(): bool
-    {
-        return parent::acceptsDelivery() && $this->status !== OutgoingEventStatus::Failed;
     }
 }

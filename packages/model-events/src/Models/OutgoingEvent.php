@@ -13,10 +13,17 @@ class OutgoingEvent extends EventModel
 {
     protected $table = 'model_outgoing_events';
 
-    /** Succeeded and Skipped are terminal; applications may add owner restrictions. */
+    /** Statuses a delivery may still be sent from; Succeeded, Failed and Skipped are terminal. */
+    public const ACCEPTING_STATUSES = [OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying];
+
+    /**
+     * Only an unfinished delivery accepts delivery. Failed is terminal for automatic
+     * processing: a stale job or queue:retry never resumes it, only a manual retry
+     * (RoutedDeliveryLifecycle::retry) reopens it. Applications may add owner restrictions.
+     */
     public function acceptsDelivery(): bool
     {
-        return ! in_array($this->status, [OutgoingEventStatus::Succeeded, OutgoingEventStatus::Skipped], true);
+        return in_array($this->status, self::ACCEPTING_STATUSES, true);
     }
 
     /** Absolute attempt number limit; null preserves Laravel-managed retries. */

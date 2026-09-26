@@ -81,6 +81,19 @@ class DeliveryTest extends TestCase
         $this->assertFalse($event->attempts()->sole()->retryable);
     }
 
+    public function test_only_unfinished_deliveries_accept_delivery(): void
+    {
+        $event = $this->outgoing();
+        $accepted = [];
+        foreach (OutgoingEventStatus::cases() as $status) {
+            $event->status = $status;
+            if ($event->acceptsDelivery()) {
+                $accepted[] = $status;
+            }
+        }
+        $this->assertSame([OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying], $accepted);
+    }
+
     public function test_skipped_delivery_is_terminal_and_not_a_failure(): void
     {
         $event = $this->outgoing();

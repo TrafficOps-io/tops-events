@@ -4,6 +4,7 @@ namespace TrafficOps\ModelEvents\Services;
 
 use Closure;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
+use TrafficOps\ModelEvents\Exceptions\DeliveryNotRetryable;
 use TrafficOps\ModelEvents\Models\RoutedOutgoingEvent;
 use TrafficOps\ModelEvents\Support\EventLock;
 
@@ -38,11 +39,20 @@ final class RoutedDeliveryLifecycle
         ];
     }
 
-    /** The guard runs on the locked current row; history and the original target remain intact. */
+    /**
+     * The only path that reopens a Failed (or Skipped) delivery, with a fresh attempt budget.
+     * A Succeeded delivery cannot be retried. The guard runs on the locked current row;
+     * history and the original target remain intact.
+     *
+     * @throws DeliveryNotRetryable
+     */
     public function retry(RoutedOutgoingEvent $event, ?Closure $guard = null, array $metadata = []): RoutedOutgoingEvent
     {
         return $this->lock->run($event->id, fn () => $event->getConnection()->transaction(function () use ($event, $guard, $metadata) {
             $current = $event->newQuery()->lockForUpdate()->findOrFail($event->id);
+            if ($current->status === OutgoingEventStatus::Succeeded) {
+                throw new DeliveryNotRetryable("Outgoing event [{$current->id}] succeeded and cannot be retried.");
+            }
             $guard?->__invoke($current);
             $current->forceFill([
                 'attempts_offset' => $current->attempts()->max('number') ?? 0,
