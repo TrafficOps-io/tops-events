@@ -40,9 +40,11 @@ final class RoutedDeliveryLifecycle
     }
 
     /**
-     * The only path that reopens a Failed (or Skipped) delivery, with a fresh attempt budget.
-     * A Succeeded delivery cannot be retried. The guard runs on the locked current row;
-     * history and the original target remain intact.
+     * A manual re-run of a Failed delivery with a fresh attempt budget: the only path that
+     * reopens Failed. Every other status is refused: Succeeded and Skipped are terminal, and
+     * an unfinished delivery is still being processed. The retried delivery is due now
+     * (scheduled_at = now()), which restarts its expiry horizon. The guard runs on the
+     * locked current row; history and the original target remain intact.
      *
      * @throws DeliveryNotRetryable
      */
@@ -50,14 +52,14 @@ final class RoutedDeliveryLifecycle
     {
         return $this->lock->run($event->id, fn () => $event->getConnection()->transaction(function () use ($event, $guard, $metadata) {
             $current = $event->newQuery()->lockForUpdate()->findOrFail($event->id);
-            if ($current->status === OutgoingEventStatus::Succeeded) {
-                throw new DeliveryNotRetryable("Outgoing event [{$current->id}] succeeded and cannot be retried.");
+            if ($current->status !== OutgoingEventStatus::Failed) {
+                throw new DeliveryNotRetryable("Delivery [{$current->id}] is {$current->status->value}; only a failed delivery can be retried.");
             }
             $guard?->__invoke($current);
             $current->forceFill([
                 'attempts_offset' => $current->attempts()->max('number') ?? 0,
                 'status' => OutgoingEventStatus::Pending,
-                'available_at' => now(), 'scheduled_at' => null,
+                'available_at' => now(), 'scheduled_at' => now(),
                 'completed_at' => null, 'last_error' => null,
                 'metadata' => [...($current->metadata ?? []), ...$metadata],
             ])->saveOrFail();
