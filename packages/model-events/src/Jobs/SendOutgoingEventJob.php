@@ -74,7 +74,7 @@ abstract class SendOutgoingEventJob implements ShouldQueue
 
     final public function failed(?Throwable $error): void
     {
-        // With tries = 0 Laravel raises MaxAttemptsExceededException only when retryUntil() has passed.
+        // Laravel gives retryUntil() precedence over tries: this means the expiry horizon passed.
         if ($error instanceof MaxAttemptsExceededException && ! $error instanceof TimeoutExceededException) {
             $error = new DeliveryExpired($error);
         }

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use InvalidArgumentException;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use TrafficOps\ModelEvents\DTO\DeliveryResult;
 use TrafficOps\ModelEvents\DTO\OutgoingEventData;
@@ -79,9 +80,15 @@ class QueueTest extends TestCase
         $this->assertSame(OutgoingEventStatus::Succeeded, $event->refresh()->status);
     }
 
-    public function test_lock_busy_releases_are_not_attempts_and_never_consume_the_budget(): void
+    public static function queueAttemptLimits(): array
     {
-        config(['queue.default' => 'database']);
+        return ['default' => [0], 'legacy consumer config' => [3]];
+    }
+
+    #[DataProvider('queueAttemptLimits')]
+    public function test_lock_busy_releases_are_not_attempts_and_never_consume_the_budget(int $tries): void
+    {
+        config(['queue.default' => 'database', 'model-events.queue.tries' => $tries]);
         $event = $this->outgoing();
         app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
         app(EventLock::class)->run($event->id, function () use ($event) {
@@ -99,9 +106,10 @@ class QueueTest extends TestCase
         $this->assertSame(0, DB::table('jobs')->count());
     }
 
-    public function test_not_yet_due_releases_are_not_attempts_and_never_consume_the_budget(): void
+    #[DataProvider('queueAttemptLimits')]
+    public function test_not_yet_due_releases_are_not_attempts_and_never_consume_the_budget(int $tries): void
     {
-        config(['queue.default' => 'database']);
+        config(['queue.default' => 'database', 'model-events.queue.tries' => $tries]);
         $event = $this->outgoing();
         app(OutgoingScheduler::class)->schedule($event, TestSendJob::class);
         for ($release = 1; $release <= 5; $release++) {
