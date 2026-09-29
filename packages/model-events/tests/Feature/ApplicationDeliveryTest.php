@@ -2,6 +2,9 @@
 
 namespace TrafficOps\ModelEvents\Tests\Feature;
 
+use TrafficOps\ModelEvents\DTO\DeliveryResult;
+use TrafficOps\ModelEvents\DTO\Payload;
+use TrafficOps\ModelEvents\DTO\PreparedDelivery;
 use TrafficOps\ModelEvents\Enums\AttemptStatus;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Exceptions\PermanentDeliveryFailure;
@@ -31,9 +34,36 @@ class ApplicationDeliveryTest extends TestCase
         $this->assertSame(AttemptStatus::Interrupted, $event->attempts()->sole()->status);
     }
 
-    public function test_application_can_prevent_stale_jobs_from_restarting_failed_events(): void
+    public function test_a_delivery_without_an_explicit_limit_uses_the_default_attempt_limit(): void
+    {
+        $event = $this->outgoing();
+        $this->assertSame(OutgoingEvent::DEFAULT_ATTEMPT_LIMIT, $event->deliveryAttemptLimit());
+        foreach (range(1, OutgoingEvent::DEFAULT_ATTEMPT_LIMIT) as $number) {
+            $event->attempts()->create(['number' => $number, 'status' => AttemptStatus::Failed, 'started_at' => now(), 'completed_at' => now()]);
+        }
+        $event->update(['status' => OutgoingEventStatus::Retrying]);
+        $result = app(DeliveryService::class)->deliver($event->id, fn () => $this->fail('Preparation was invoked.'), fn () => $this->fail('Transport was invoked.'));
+        $this->assertSame(OutgoingEventStatus::Failed, $result->status);
+        $this->assertSame(OutgoingEvent::DEFAULT_ATTEMPT_LIMIT, $event->attempts()->count());
+        $this->assertSame('Delivery retry budget exhausted.', $result->last_error);
+    }
+
+    public function test_a_retryable_result_on_the_last_permitted_attempt_finishes_as_failed_without_a_retry(): void
     {
         config(['model-events.models.outgoing' => LimitedOutgoing::class]);
+        $event = $this->outgoing();
+        $result = app(DeliveryService::class)->deliver($event->id,
+            fn () => new PreparedDelivery(Payload::text('x'), 'y'),
+            fn () => new DeliveryResult(false, true, error: 'Rate limited'),
+        );
+        $this->assertSame(OutgoingEventStatus::Failed, $result->status);
+        $this->assertNotNull($result->completed_at);
+        $this->assertSame('Rate limited', $result->last_error);
+        $this->assertTrue($event->attempts()->sole()->retryable, 'The attempt keeps the transport verdict; the budget decides the delivery.');
+    }
+
+    public function test_failed_delivery_is_terminal_for_stale_jobs_in_the_base_model(): void
+    {
         $event = $this->outgoing();
         $event->update(['status' => OutgoingEventStatus::Failed]);
         $result = app(DeliveryService::class)->deliver($event->id, fn () => $this->fail('Preparation was invoked.'), fn () => $this->fail('Transport was invoked.'));
@@ -44,13 +74,8 @@ class ApplicationDeliveryTest extends TestCase
 
 class LimitedOutgoing extends OutgoingEvent
 {
-    public function deliveryAttemptLimit(): ?int
+    public function deliveryAttemptLimit(): int
     {
         return 1;
-    }
-
-    public function acceptsDelivery(): bool
-    {
-        return parent::acceptsDelivery() && $this->status !== OutgoingEventStatus::Failed;
     }
 }

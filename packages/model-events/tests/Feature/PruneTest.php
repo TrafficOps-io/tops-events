@@ -42,7 +42,88 @@ class PruneTest extends TestCase
         $this->assertSame(0, OutgoingEvent::query()->count());
     }
 
-    public function test_active_events_and_their_sources_never_expire(): void
+    public function test_skipped_deliveries_are_finished_and_pruned_with_their_source(): void
+    {
+        $owner = $this->owner();
+        $source = $owner->logIncomingEvent(new IncomingEventData('in', Payload::text('raw'), IncomingEventStatus::Ok, receivedAt: now()->subDays(40)));
+        $skipped = $owner->logOutgoingEvent(new OutgoingEventData('out', Payload::text('x'), 'y', $source));
+        $skipped->update(['status' => OutgoingEventStatus::Skipped, 'completed_at' => now()->subDays(31)]);
+        $this->prune();
+        $this->assertNull($skipped->fresh());
+        $this->assertNull($source->fresh());
+    }
+
+    public function test_unfinished_delivery_older_than_retention_is_failed_as_expired(): void
+    {
+        $this->travelTo(now()->startOfSecond());
+        $owner = $this->owner();
+        $source = $owner->logIncomingEvent(new IncomingEventData('in', Payload::text('raw'), IncomingEventStatus::Ok, receivedAt: now()->subDays(40)));
+        $stuck = [];
+        foreach ([OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying] as $status) {
+            $event = $owner->logOutgoingEvent(new OutgoingEventData('out', Payload::text('x'), 'y', $source));
+            $attempt = $event->attempts()->create(['number' => 1, 'status' => AttemptStatus::Sending, 'started_at' => now()->subDays(40)]);
+            $event->update(['status' => $status, 'created_at' => now()->subDays(40), 'active_attempt_id' => $attempt->id]);
+            $stuck[] = $event;
+        }
+        $this->prune();
+        foreach ($stuck as $event) {
+            $event->refresh();
+            $this->assertSame(OutgoingEventStatus::Failed, $event->status);
+            $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $event->last_error);
+            $this->assertTrue($event->completed_at->equalTo(now()));
+            $this->assertNull($event->active_attempt_id);
+            $this->assertFalse($event->acceptsDelivery());
+            $this->assertSame(AttemptStatus::Interrupted, $event->attempts()->sole()->status);
+            $this->assertNotNull($event->attempts()->sole()->completed_at);
+        }
+        // Expired deliveries are finished now and follow the normal retention; the source waits for them.
+        $this->assertNotNull($source->fresh());
+        $this->travel(30)->days();
+        $this->prune();
+        $this->assertSame(0, OutgoingEvent::query()->count());
+        $this->assertNull($source->fresh());
+    }
+
+    public function test_a_later_scheduled_at_extends_the_life_of_an_unfinished_delivery(): void
+    {
+        $owner = $this->owner();
+        $waiting = $owner->logOutgoingEvent(new OutgoingEventData('out', Payload::text('x'), 'y'));
+        $waiting->update(['status' => OutgoingEventStatus::Queued, 'created_at' => now()->subDays(40), 'scheduled_at' => now()->subDays(5)]);
+        $overdue = $owner->logOutgoingEvent(new OutgoingEventData('out', Payload::text('x'), 'y'));
+        $overdue->update(['status' => OutgoingEventStatus::Queued, 'created_at' => now()->subDays(40), 'scheduled_at' => now()->subDays(31)]);
+        $this->prune();
+        $this->assertSame(OutgoingEventStatus::Queued, $waiting->fresh()->status);
+        $this->assertSame(OutgoingEventStatus::Failed, $overdue->fresh()->status);
+        $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $overdue->fresh()->last_error);
+    }
+
+    public function test_expiry_skips_a_delivery_held_by_an_active_worker(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Processing, 'created_at' => now()->subDays(40)]);
+        app(EventLock::class)->run($event->id, function () use ($event) {
+            $this->prune();
+            $this->assertSame(OutgoingEventStatus::Processing, $event->fresh()->status);
+        });
+        $this->prune();
+        $this->assertSame(OutgoingEventStatus::Failed, $event->fresh()->status);
+    }
+
+    public function test_expiry_window_defaults_to_outgoing_retention_and_can_be_set_separately(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Pending, 'created_at' => now()->subDays(3)]);
+        $this->assertNull(config('model-events.retention.expire_days'));
+        $this->prune();
+        $this->assertSame(OutgoingEventStatus::Pending, $event->fresh()->status);
+
+        config(['model-events.retention.outgoing_days' => null, 'model-events.retention.expire_days' => 2]);
+        $this->prune();
+        $this->assertSame(OutgoingEventStatus::Failed, $event->fresh()->status);
+        $this->assertSame(OutgoingEvent::ERROR_EXPIRED, $event->fresh()->last_error);
+    }
+
+    public function test_active_deliveries_within_retention_and_their_sources_are_kept(): void
     {
         $owner = $this->owner();
         $source = $owner->logIncomingEvent(new IncomingEventData('in', Payload::text('raw'), IncomingEventStatus::Error, receivedAt: now()->subDays(100)));
@@ -84,7 +165,10 @@ class PruneTest extends TestCase
 
             protected function outgoingQuery(): Builder
             {
-                if (++$this->queries === 2) {
+                // 1: expiry candidates, 2: deletion candidates, 3: the locked re-check of this event.
+                if (++$this->queries === 3) {
+                    // A manual retry reopened the delivery between candidate selection and the locked re-check.
+                    $this->event->update(['status' => OutgoingEventStatus::Pending, 'completed_at' => null]);
                     app(OutgoingScheduler::class)->schedule($this->event, TestSendJob::class, now()->addDay());
                 }
 

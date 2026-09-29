@@ -16,7 +16,12 @@ final class OutgoingScheduler
 {
     public function __construct(private Dispatcher $bus) {}
 
-    public function schedule(OutgoingEvent $event, string $jobClass, ?DateTimeInterface $at = null, bool $retryFailed = true): OutgoingEvent
+    /**
+     * Moves a Pending delivery to Queued and publishes its job after the outer commit.
+     * Failed is terminal: reopening it is RoutedDeliveryLifecycle::retry()'s job, after
+     * which the Pending result is scheduled here.
+     */
+    public function schedule(OutgoingEvent $event, string $jobClass, ?DateTimeInterface $at = null): OutgoingEvent
     {
         if (! $event->exists || ! is_subclass_of($jobClass, SendOutgoingEventJob::class) || (new ReflectionClass($jobClass))->isAbstract()) {
             throw new InvalidArgumentException('Scheduling requires a persisted outgoing event and a concrete SendOutgoingEventJob subclass.');
@@ -29,11 +34,10 @@ final class OutgoingScheduler
         $job->afterCommit()->delay($at);
         $model = ModelResolver::make('outgoing');
         // Queue publication is deferred until this connection's outer transaction commits.
-        $model->getConnection()->transaction(function () use ($model, $event, $job, $at, $retryFailed) {
+        $model->getConnection()->transaction(function () use ($model, $event, $job, $at) {
             $stored = $model->newQuery()->lockForUpdate()->findOrFail($event->getKey());
-            $allowed = $retryFailed ? [OutgoingEventStatus::Pending, OutgoingEventStatus::Failed] : [OutgoingEventStatus::Pending];
-            if (! in_array($stored->status, $allowed, true)) {
-                throw new InvalidArgumentException('Only pending or failed events can be scheduled.');
+            if ($stored->status !== OutgoingEventStatus::Pending) {
+                throw new InvalidArgumentException('Only pending deliveries can be scheduled.');
             }
             $stored->forceFill([
                 'status' => OutgoingEventStatus::Queued, 'scheduled_at' => $at ?? now(),

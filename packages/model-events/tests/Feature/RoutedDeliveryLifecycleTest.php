@@ -11,7 +11,9 @@ use TrafficOps\ModelEvents\DTO\Payload;
 use TrafficOps\ModelEvents\Enums\AttemptStatus;
 use TrafficOps\ModelEvents\Enums\IncomingEventStatus;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
+use TrafficOps\ModelEvents\Exceptions\DeliveryNotRetryable;
 use TrafficOps\ModelEvents\Exceptions\EventBusy;
+use TrafficOps\ModelEvents\Jobs\PruneModelEventsJob;
 use TrafficOps\ModelEvents\Models\OutgoingEventAttempt;
 use TrafficOps\ModelEvents\Models\RoutedOutgoingEvent;
 use TrafficOps\ModelEvents\Services\RoutedDeliveryLifecycle;
@@ -52,7 +54,7 @@ class RoutedDeliveryLifecycleTest extends TestCase
         $this->assertSame(['target' => 'original'], $retried->decodedPayload());
         $this->assertSame('crm', $retried->destination);
         $this->assertSame(['rule_id' => 7, 'disposition' => 'retrying'], $retried->metadata);
-        $this->assertNull($retried->scheduled_at);
+        $this->assertTrue($retried->scheduled_at->equalTo(now()), 'A retried delivery is due now, so its expiry horizon restarts.');
         $this->assertNull($retried->completed_at);
         $this->assertNull($retried->last_error);
         $this->assertTrue($retried->available_at->equalTo(now()));
@@ -61,18 +63,46 @@ class RoutedDeliveryLifecycleTest extends TestCase
     public function test_retry_guard_reads_current_status_and_rejects_without_modifying_history(): void
     {
         $event = $this->outgoing();
-        $event->newQuery()->whereKey($event->id)->update(['status' => OutgoingEventStatus::Succeeded]);
+        $event->newQuery()->whereKey($event->id)->update(['status' => OutgoingEventStatus::Failed]);
         try {
             app(RoutedDeliveryLifecycle::class)->retry($event, function ($current) {
-                $this->assertSame(OutgoingEventStatus::Succeeded, $current->status);
+                $this->assertSame(OutgoingEventStatus::Failed, $current->status);
                 throw new LogicException('Cannot retry this event.');
             });
             $this->fail('Expected guard rejection.');
         } catch (LogicException $exception) {
             $this->assertSame('Cannot retry this event.', $exception->getMessage());
         }
-        $this->assertSame(OutgoingEventStatus::Succeeded, $event->fresh()->status);
+        $this->assertSame(OutgoingEventStatus::Failed, $event->fresh()->status);
         $this->assertSame(0, $event->attempts()->count());
+    }
+
+    public function test_retry_reopens_only_a_failed_delivery(): void
+    {
+        $owner = $this->owner();
+        foreach (OutgoingEventStatus::cases() as $status) {
+            if ($status === OutgoingEventStatus::Failed) {
+                continue;
+            }
+            $event = $owner->logOutgoingEvent(new OutgoingEventData('notify', Payload::text('x'), 'recipient'));
+            $event->update(['status' => $status]);
+            try {
+                app(RoutedDeliveryLifecycle::class)->retry($event, fn () => $this->fail("The guard must not run for a {$status->value} delivery."));
+                $this->fail("A {$status->value} delivery cannot be retried.");
+            } catch (DeliveryNotRetryable $refusal) {
+                $this->assertSame($status, $event->fresh()->status);
+                $this->assertStringStartsWith("Delivery [{$event->id}]", $refusal->getMessage());
+            }
+        }
+    }
+
+    public function test_retried_delivery_is_not_expired_by_a_prune_run_before_it_is_scheduled(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Failed, 'completed_at' => now(), 'created_at' => now()->subDays(40)]);
+        app(RoutedDeliveryLifecycle::class)->retry($event);
+        (new class extends PruneModelEventsJob {})->handle(app(EventLock::class));
+        $this->assertSame(OutgoingEventStatus::Pending, $event->fresh()->status);
     }
 
     public function test_retry_cannot_overlap_an_active_delivery_lock(): void
@@ -115,11 +145,16 @@ class RoutedDeliveryLifecycleTest extends TestCase
 
         $event->metadata = ['trigger_kind' => 'system', 'trigger_name' => 'delivery_failed'];
         $this->assertFalse($lifecycle->shouldRouteFailure($event));
-        $event->metadata = ['disposition' => 'skipped'];
-        $this->assertFalse($lifecycle->shouldRouteFailure($event));
-        $this->assertTrue($lifecycle->shouldRouteFailure($event, ignoreSkipped: false));
         $event->save();
         $this->assertFalse($lifecycle->shouldRouteFailure($event));
+    }
+
+    public function test_skipped_delivery_never_routes_as_a_failure(): void
+    {
+        $event = $this->outgoing();
+        $event->update(['status' => OutgoingEventStatus::Skipped, 'completed_at' => now(), 'last_error' => 'Owner is paused.']);
+        $this->assertTrue($event->wasChanged('status'));
+        $this->assertFalse(app(RoutedDeliveryLifecycle::class)->shouldRouteFailure($event));
     }
 
     private function attempt(RoutedOutgoingEvent $event, int $number, int $retryAfter = 0, array $response = []): OutgoingEventAttempt

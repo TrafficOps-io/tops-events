@@ -10,6 +10,7 @@ use TrafficOps\ModelEvents\Enums\AttemptStatus;
 use TrafficOps\ModelEvents\Enums\OutgoingEventStatus;
 use TrafficOps\ModelEvents\Exceptions\EventBusy;
 use TrafficOps\ModelEvents\Exceptions\RetryableDelivery;
+use TrafficOps\ModelEvents\Exceptions\SkippedDelivery;
 use TrafficOps\ModelEvents\Models\OutgoingEventAttempt;
 use TrafficOps\ModelEvents\Services\DeliveryService;
 use TrafficOps\ModelEvents\Support\EventLock;
@@ -78,6 +79,40 @@ class DeliveryTest extends TestCase
         $this->assertSame(OutgoingEventStatus::Failed, $event->refresh()->status);
         $this->assertNotNull($event->completed_at);
         $this->assertFalse($event->attempts()->sole()->retryable);
+    }
+
+    public function test_only_unfinished_deliveries_accept_delivery(): void
+    {
+        $event = $this->outgoing();
+        $accepted = [];
+        foreach (OutgoingEventStatus::cases() as $status) {
+            $event->status = $status;
+            if ($event->acceptsDelivery()) {
+                $accepted[] = $status;
+            }
+        }
+        $this->assertSame([OutgoingEventStatus::Pending, OutgoingEventStatus::Queued, OutgoingEventStatus::Processing, OutgoingEventStatus::Retrying], $accepted);
+    }
+
+    public function test_skipped_delivery_is_terminal_and_not_a_failure(): void
+    {
+        $event = $this->outgoing();
+        $result = app(DeliveryService::class)->deliver($event->id,
+            fn () => throw new SkippedDelivery('Owner is paused.'),
+            fn () => $this->fail('A skipped delivery must not be sent.'),
+        );
+        $this->assertSame(OutgoingEventStatus::Skipped, $result->status);
+        $this->assertSame('Owner is paused.', $result->last_error);
+        $this->assertNotNull($result->completed_at);
+        $this->assertFalse($result->acceptsDelivery());
+        $attempt = $event->attempts()->sole();
+        $this->assertSame(SkippedDelivery::class, $attempt->exception_class);
+        $this->assertFalse($attempt->retryable);
+
+        app(DeliveryService::class)->deliver($event->id, fn () => $this->fail('Skipped is terminal.'), fn () => $this->fail('Skipped is terminal.'));
+        (new TestSendJob($event->id))->failed(new RuntimeException('Exhausted'));
+        $this->assertSame(OutgoingEventStatus::Skipped, $event->refresh()->status);
+        $this->assertSame(1, $event->attempts()->count());
     }
 
     public function test_prepare_and_send_exceptions_are_recorded_and_rethrown(): void

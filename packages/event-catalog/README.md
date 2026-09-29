@@ -7,7 +7,18 @@ Shared field discovery, event schemas, payload validation and routing suggestion
 - `PayloadFields` discovers at most 100 body/query/header fields per request. Source order, reserved control keys, empty-array discovery and support for dotted header names are configurable. It visits nested objects and indexed arrays without retaining values, rejects unaddressable/overlong paths and stops walking once the limit is reached. Merging preserves existing required and exact-value rules, canonicalizes header identity and never removes configured rules to meet a discovery limit.
 - `FieldSchema` supplies common Laravel validation rules for schema editors and APIs: field sources, paths, required flags, optional types and exact values. Applications add row IDs, persistence rules and their own allowed sources.
 - `FieldValidator` applies required, type and exact-value constraints. Exact matching preserves scalar types, treats integer/float equivalents as equal and never includes configured secrets in errors. Missing optional fields pass. Header lookup explicitly supports literal names (including dots) or traversal through the raw header array, such as `x-id.0`, before single-value unwrapping.
-- `EventNameResolver` handles path/query/body precedence, unnamed events, maximum length, optional parameter-name selectors and reserved system event names.
+- `EventNameResolver` handles path/query/body precedence, unnamed events, maximum length and optional parameter-name selectors. Invalid names (wrong type, too long) resolve to `unnamed` with an error. A reserved *system event* name is a hard validation failure: `resolve()` throws `Exceptions\ReservedEventName` instead of returning, so the incoming event can never be journaled as `ok` or produce deliveries. The exception carries `name`, `field` and `errors()` in the same shape as the returned errors; journal the event as `validation_failed` with them.
+
+```php
+use TrafficOps\EventCatalog\Exceptions\ReservedEventName;
+
+try {
+    [$name, $errors] = $resolver->resolve($payload, $pathName);
+} catch (ReservedEventName $rejection) {
+    [$name, $errors] = [$rejection->name, $rejection->errors()];
+    // status = validation_failed, no deliveries.
+}
+```
 - `EventCatalog` stores only event names, kinds and field metadata. Custom and system events have separate namespaces. Selected-event suggestions merge shared paths, event associations and conflicting types; consumer options supply macro prefixes and header-array suffixes.
 - `FieldSuggestions` combines typed fields and bounded sample observations for system-event payloads and installation context. Its output contains paths, types and event names only.
 
